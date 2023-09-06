@@ -3,6 +3,20 @@ const crypto = require('crypto');
 
 let explicit = {};
 
+let extract = (x) => {
+  for (let i in x) {
+    global[i] = x[i];
+  }
+};
+
+let find_context = (group) => {
+  for (let i in contexts) {
+    if (contexts[i].group.value == group.value) {
+      return contexts[i];
+    }
+  }
+};
+
 let spawn_trigger = (group, time = 0) => {
   return {
     OBJ_ID: 1268,
@@ -18,19 +32,69 @@ let writeClasses = (arr) => {
     clases.forEach((expl) => {
       explicit[expl] = clas;
     });
-    eval(`class $${clas} {
+
+    if (clas == 'group') {
+      eval(`class $${clas} {
+        constructor(a) {
+          this.value = a;
+          this.type = '${clas}';
+        }
+        move(x, y, duration = 0, easing = NONE, easing_rate = 2, x_multiplier = 1, y_multiplier = 1) {
+              $.add({
+                  OBJ_ID: 901,
+                  TARGET: this,
+                  MOVE_X: x * 3 * x_multiplier,
+                  MOVE_Y: y * 3 * y_multiplier,
+                  DURATION: duration,
+                  EASING: easing,
+                  EASING_RATE: easing_rate,
+              })
+              wait(duration);
+        }
+        call(delay = 0) {
+          $.add(spawn_trigger(this, delay))
+        }
+      }
+      global['${clas}'] = (x) => new $${clas}(x)`);
+    } else if (clas == 'color') {
+      eval(`class $${clas} {
       constructor(a) {
         this.value = a;
         this.type = '${clas}';
       }
-	  call(delay = 0) {
-		  $.add(spawn_trigger(this, delay))
-	  }
+      set(c, duration = 0, blending = false) {
+        $.add({
+          OBJ_ID: 899,
+          DURATION: duration,
+          TRIGGER_RED: c[0],
+          TRIGGER_GREEN: c[1],
+          TRIGGER_BLUE: c[2],
+          OPACITY: c[3] || 1,
+          BLENDING: blending,
+          TARGET_COLOR: this,
+          ACTIVE_TRIGGER: true,
+        })
+        wait(duration)
+      }
     }
     global['${clas}'] = (x) => new $${clas}(x)`);
+    } else {
+      eval(`class $${clas} {
+      constructor(a) {
+        this.value = a;
+        this.type = '${clas}';
+      }
+    }
+    global['${clas}'] = (x) => new $${clas}(x)`);
+    }
   });
 };
-writeClasses(['group/TARGET/GROUPS', 'color/TARGET_COLOR']);
+
+writeClasses([
+  'group/TARGET/GROUPS',
+  'color/TARGET_COLOR/COLOR/COLOR_2',
+  'block/BLOCK_A/BLOCK_B',
+]);
 
 let d = {
   1: 'OBJ_ID',
@@ -99,6 +163,7 @@ let d = {
   78: 'SUBTRACT_COUNT',
   79: 'PICKUP_MODE',
   80: 'ITEM',
+  696969: 'BLOCK_A', // using this as placeholder for ID 80
   81: 'HOLD_MODE',
   82: 'TOGGLE_MODE',
   84: 'INTERVAL',
@@ -127,20 +192,28 @@ let d = {
   108: 'LINKED_GROUP',
 };
 
+let unavailable_g = 1;
+let unavailable_c = 1;
+
+let unknown_g = () => {
+  unavailable_g++;
+  return group(unavailable_g);
+};
+
+let unknown_c = () => {
+  unavailable_c++;
+  return color(unavailable_c);
+};
+
 let contexts = {
   global: {
     name: 'global',
-    group: group(0),
+    group: unknown_g(),
     objects: [],
   },
 };
 
-let unavailable = 1;
-
-let unknown_g = () => {
-  unavailable++;
-  return group(unavailable);
-};
+let last_context_children = {};
 
 let current_context = 'global';
 let set_context = (name) => {
@@ -228,6 +301,9 @@ let obj_to_levelstring = (l) => {
         throw `Expected type "${explicit[d_]}", got "${val.type}"`;
       }
     }
+    if (key == '696969') {
+      key = '80';
+    }
     res += `${key},${val},`;
   }
   return res.slice(0, -1) + ';';
@@ -259,8 +335,17 @@ let add = (o) => {
 };
 
 let prep_lvl = () => {
+  let name = 'GLOBAL_FULL';
+  contexts[name] = {
+    name,
+    group: group(0),
+    objects: [],
+  };
+  last_contexts[name] = name;
+  set_context(name);
+  contexts.global.group.call();
   for (let i in contexts) {
-    if (i !== 'global') {
+    if (i !== 'GLOBAL_FULL') {
       let context = contexts[i];
       // gives groups to objects in context
       let objects = context.objects;
@@ -277,8 +362,8 @@ let prep_lvl = () => {
         }
 
         object.SPAWN_TRIGGERED = 1;
+        // end
       }
-      // end
     }
     for (let x in contexts[i].objects) {
       let r = obj_to_levelstring(contexts[i].objects[x]);
@@ -289,6 +374,7 @@ let prep_lvl = () => {
 
 let getLevelString = () => {
   prep_lvl();
+  console.log('GROUPS:', unavailable_g);
   return resulting;
 };
 let exportLevel = () => {
@@ -315,8 +401,9 @@ let easings = {
   SINE_OUT: 15,
   EXPONENTIAL_IN_OUT: 10,
   BACK_IN: 17,
+  NONE: 0,
 };
-for (var x in easings) global[x] = easings[x];
+extract(easings);
 global.obj_props = reverse;
 
 let last_contexts = {};
@@ -347,28 +434,6 @@ let $ = {
   levelstring_to_obj,
   extend_trigger_func,
 };
-
-/*
-move_trigger: #[desc("Returns a move trigger as an object"), example("$.add( move_trigger(1g,10,0).with(obj_props.X,600) ) // Creates a move trigger at X 600 that moves group 1 a block to the right")]
-    (
-        #[desc("Group to move")] group: @group,
-        #[desc("Units to move on the X axis")] x: @number,
-        #[desc("Units to move on the Y axis")] y: @number,
-        #[desc("Duration of movement")] duration: @number = 0,
-        easing: @easing_type = NONE,
-        easing_rate: @number = 2
-    ) -> @object {
-        return obj{
-            OBJ_ID: 901,
-            TARGET: group,
-            MOVE_X: x * 3,
-            MOVE_Y: y * 3,
-            DURATION: duration,
-            EASING: easing,
-            EASING_RATE: easing_rate,
-        }
-    },
-*/
 
 let move_trigger = (group, x, y) => {
   let origin = {
@@ -409,15 +474,6 @@ let color_trigger = (
   };
   return origin;
 };
-
-let global_vars = {
-  EQUAL_TO: 0,
-  LARGER_THAN: 1,
-  SMALLER_THAN: 2,
-};
-for (let i in global_vars) {
-  global[i] = global_vars[i];
-}
 
 const range = (start, end, step) => {
   start > 0 ? start-- : null;
@@ -473,9 +529,11 @@ let wait = (time) => {
   $.add(spawn_trigger(context.group, time));
   if (get_context().linked_to) {
     context.linked_to = get_context().linked_to;
+    last_context_children[context.linked_to] = id;
   } else {
     context.linked_to = o;
     last_contexts[o] = context.name;
+    last_context_children[o] = id;
   }
   set_context(id);
 };
@@ -522,7 +580,7 @@ let counter = (num = 0, bits = 16) => {
         X: x,
         Y: y,
         ITEM: id,
-        COLOR: 1,
+        COLOR: color(1),
       }),
     if_is: (comparison, other, trig_func) => {
       $.add({
@@ -559,15 +617,10 @@ let counter = (num = 0, bits = 16) => {
         exports.if_is(LARGER_THAN, x, r2);
         exports.if_is(EQUAL_TO, x, r2);
       }*/
-      while_loop(
-        exports,
-        LARGER_THAN,
-        0,
-        trigger_function(() => {
-          exports.subtract(1);
-          item.add(1);
-        })
-      );
+      while_loop(greater_than(exports, 0), () => {
+        exports.subtract(1);
+        item.add(1);
+      });
     },
     copy_to: (item, factor = 1) => {
       // self = exports;
@@ -624,14 +677,9 @@ let counter = (num = 0, bits = 16) => {
       );
     },
     reset: () => {
-      while_loop(
-        exports,
-        LARGER_THAN,
-        0,
-        trigger_function(() => {
-          exports.subtract(1);
-        })
-      );
+      while_loop(greater_than(exports, 0), () => {
+        exports.subtract(1);
+      });
     },
     multiply: (factor) => {
       if (typeof factor == 'number') {
@@ -640,15 +688,10 @@ let counter = (num = 0, bits = 16) => {
         temp.add_to(exports);
       } else if (typeof factor == 'object') {
         let tmp = exports.clone(); // clones current counter
-        while_loop(
-          factor,
-          LARGER_THAN,
-          1,
-          trigger_function(() => {
-            tmp.copy_to(exports); // adds clone to current counter (basically adding again)
-            factor.subtract(1); // subtract cloned factor
-          })
-        );
+        while_loop(factor, LARGER_THAN, 1, () => {
+          tmp.copy_to(exports); // adds clone to current counter (basically adding again)
+          factor.subtract(1); // subtract cloned factor
+        });
       }
     },
     multiply_neg: (factor) => {
@@ -657,18 +700,12 @@ let counter = (num = 0, bits = 16) => {
         exports.add_to(temp, factor);
         temp.add_to(exports);
       } else if (typeof factor == 'object') {
-        console.log(factor);
         factor = factor.clone();
-        while_loop(
-          factor,
-          SMALLER_THAN,
-          -1,
-          trigger_function(() => {
-            let tmp = exports.clone();
-            tmp.add_to(exports);
-            factor.add(1);
-          })
-        );
+        while_loop(factor, SMALLER_THAN, -1, () => {
+          let tmp = exports.clone();
+          tmp.add_to(exports);
+          factor.add(1);
+        });
       }
     },
   };
@@ -677,12 +714,6 @@ let counter = (num = 0, bits = 16) => {
 
 let on = (event, callback) => {
   event.event(callback);
-};
-
-let extract = (x) => {
-  for (let i in x) {
-    global[i] = x[i];
-  }
 };
 
 let touch = (dual_side = false) => {
@@ -698,29 +729,6 @@ let touch = (dual_side = false) => {
   };
 };
 
-String.prototype.to_obj = function () {
-  let or = {
-    OBJ_ID: 914,
-    TEXT: btoa(this),
-    with: (prop, val) => {
-      or[d[prop]] = val;
-      return or;
-    },
-  };
-  return or;
-};
-
-let while_loop = (count, comparison, other, trig_fn, del = 0.01) => {
-  $.extend_trigger_func(trig_fn, () => {
-    count.if_is(
-      comparison,
-      other,
-      trigger_function(() => trig_fn.call(del))
-    );
-  });
-  trig_fn.call(del);
-};
-
 let touch_end = (dual_side = false) => {
   return {
     event: (trig_func) =>
@@ -734,7 +742,181 @@ let touch_end = (dual_side = false) => {
   };
 };
 
+let collision = (a, b) => {
+  return {
+    event: (t) =>
+      $.add({
+        OBJ_ID: 1815,
+        BLOCK_A: a,
+        BLOCK_B: b,
+        ACTIVATE_GROUP: true,
+        ACTIVATE_ON_EXIT: false,
+        TARGET: t,
+      }),
+  };
+};
+
+let collision_exit = (a, b) => {
+  return {
+    event: (t) =>
+      $.add({
+        OBJ_ID: 1815,
+        BLOCK_A: a,
+        BLOCK_B: b,
+        ACTIVATE_GROUP: true,
+        ACTIVATE_ON_EXIT: true,
+        TARGET: t,
+      }),
+  };
+};
+
+let death = () => {
+  return {
+    event: (t) =>
+      $.add({
+        OBJ_ID: 1812,
+        ACTIVATE_GROUP: true,
+        TARGET: t,
+      }),
+  };
+};
+
+let count = (it, hits, multi = true) => {
+  return {
+    event: (t) => {
+      $.add({
+        OBJ_ID: 1611,
+        ACTIVATE_GROUP: true,
+        TARGET: t,
+        ITEM: it,
+        COUNT: hits,
+        COUNT_MULTI_ACTIVATE: multi,
+      });
+    },
+  };
+};
+
+let x_position = (position) => {
+  return {
+    event: (t) => $.add(spawn_trigger(t).with(X, position).with(Y, 2145)),
+  };
+};
+
+String.prototype.to_obj = function () {
+  let or = {
+    OBJ_ID: 914,
+    TEXT: btoa(this),
+    with: (prop, val) => {
+      or[d[prop]] = val;
+      return or;
+    },
+  };
+  return or;
+};
+
+let greater_than = (count, other) => ({
+  count,
+  comparison: LARGER_THAN,
+  other,
+});
+
+let equal_to = (count, other) => ({ count, comparison: EQUAL_TO, other });
+let less_than = (count, other) => ({ count, comparison: SMALLER_THAN, other });
+
+let while_loop = (r, trig_fn, del = 0.01) => {
+  console.log(r);
+  let { count, comparison, other } = r;
+  let old_context = current_context;
+
+  let context = create_context(crypto.randomUUID());
+  count.if_is(comparison, other, context.group);
+
+  set_context(context.name);
+  trig_fn(context.group);
+  set_context(old_context);
+
+  trig_fn = context.group;
+
+  let ctx_name = find_context(trig_fn).name;
+  let curr_g = contexts[last_context_children[ctx_name]];
+
+  if (curr_g) {
+    curr_g = curr_g.group;
+  } else {
+    curr_g = trig_fn;
+  }
+
+  $.extend_trigger_func(curr_g, () => {
+    contexts[old_context].group.call(del);
+  });
+};
+
+let obj_ids = {
+  special: {
+    USER_COIN: 1329,
+    H_BLOCK: 1859,
+    J_BLOCK: 1813,
+    TEXT: 914,
+    S_BLOCK: 1829,
+    ITEM_DISPLAY: 1615,
+    D_BLOCK: 1755,
+    COLLISION_BLOCK: 1816,
+  },
+  triggers: {
+    SPAWN: 1268,
+    ON_DEATH: 1812,
+    ROTATE: 1346,
+    COUNT: 1611,
+    DISABLE_TRAIL: 33,
+    HIDE: 1612,
+    PICKUP: 1817,
+    COLLISION: 1815,
+    ENABLE_TRAIL: 32,
+    ANIMATE: 1585,
+    TOUCH: 1595,
+    INSTANT_COUNT: 1811,
+    BG_EFFECT_OFF: 1819,
+    TOGGLE: 1049,
+    MOVE: 901,
+    ALPHA: 1007,
+    SHOW: 1613,
+    STOP: 1616,
+    FOLLOW: 1347,
+    PULSE: 1006,
+    BG_EFFECT_ON: 1818,
+    SHAKE: 1520,
+    FOLLOW_PLAYER_Y: 1814,
+    COLOR: 899,
+  },
+  portals: {
+    SPEED_GREEN: 202,
+    TELEPORT: 747,
+    CUBE: 12,
+    MIRROR_OFF: 46,
+    WAVE: 660,
+    SPIDER: 1331,
+    SPEED_RED: 1334,
+    GRAVITY_DOWN: 10,
+    SPEED_BLUE: 201,
+    UFO: 111,
+    ROBOT: 745,
+    MIRROR_ON: 45,
+    GRAVITY_UP: 11,
+    DUAL_ON: 286,
+    SIZE_MINI: 101,
+    BALL: 47,
+    SIZE_NORMAL: 99,
+    SHIP: 13,
+    SPEED_PINK: 203,
+    SPEED_YELLOW: 200,
+    DUAL_OFF: 287,
+  },
+};
+
 let exps = {
+  EQUAL_TO: 0,
+  LARGER_THAN: 1,
+  SMALLER_THAN: 2,
   $,
   counter,
   spawn_trigger,
@@ -744,11 +926,25 @@ let exps = {
   on,
   touch,
   touch_end,
+  touch_end,
+  collision,
+  collision_exit,
+  death,
+  count,
+  x_position,
   wait,
   range,
   get_context,
   extract,
   while_loop,
+  obj_ids,
+  find_context,
+  greater_than,
+  equal_to,
+  less_than,
+  unknown_g,
+  unknown_c,
+  rgb: (r, g, b) => [r, g, b],
 };
 
 for (let i in exps) {
