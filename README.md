@@ -1,2 +1,2 @@
 # osmo
-A reprogrammable virtual machine written in JS (using G.js)
+A reprogrammable virtual machine for Geometry Dash written in JS (using G.js)
